@@ -136,20 +136,68 @@ See [Makefile](./Makefile)
 
 ### Running in Docker
 
-Pass JVM flags via `JAVA_OPTS`:
+The `Dockerfile` in the repository root is a multi-stage build:
+
+1. `frontend` — Node 24 builds the React Admin bundle (`frontend/dist`).
+2. `backend` — JDK 21 copies the bundle into `src/main/resources/static` and builds the Spring Boot jar (`./gradlew bootJar`).
+3. `runtime` — JRE 21 runs the jar as a non-root user.
+
+Set the image name once (replace `<owner>` with your GitHub user or organization):
 
 ```bash
-docker run --rm -p 8080:8080 \
-  -e JAVA_OPTS="-Xms256m -Xmx512m -Dspring.profiles.active=prod" \
-  ...
+export IMAGE=ghcr.io/<owner>/project-devops-deploy
 ```
 
-Useful JVM options:
+#### Build the image
+
+```bash
+docker build -t $IMAGE:latest .
+```
+
+#### Run locally (dev profile, in-memory H2)
+
+```bash
+docker run --rm -p 8080:8080 -p 9090:9090 $IMAGE:latest
+```
+
+- App and frontend: `http://localhost:8080/`
+- Health check: `http://localhost:9090/actuator/health`
+
+#### Run with the prod profile
+
+```bash
+docker run --rm -p 8080:8080 -p 9090:9090 \
+  -e JAVA_OPTS="-Xms256m -Xmx512m" \
+  -e SPRING_PROFILES_ACTIVE=prod \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://<db-host>:5432/bulletins \
+  -e SPRING_DATASOURCE_USERNAME=<db-user> \
+  -e SPRING_DATASOURCE_PASSWORD=<db-password> \
+  $IMAGE:latest
+```
+
+Pass S3 settings (`STORAGE_S3_*`) the same way. Do not bake secrets into the image.
+
+#### Push the image to GitHub Container Registry
+
+```bash
+echo <token> | docker login ghcr.io -u <github-user> --password-stdin
+docker push $IMAGE:latest
+```
+
+The token needs the `write:packages` scope. With GitHub CLI you can use `gh auth token` instead of `<token>`.
+
+To publish a specific version, add a second tag (for example, the commit SHA):
+
+```bash
+docker tag $IMAGE:latest $IMAGE:$(git rev-parse --short HEAD)
+docker push $IMAGE:$(git rev-parse --short HEAD)
+```
+
+Useful JVM options for `JAVA_OPTS`:
 
 - `-Xms/-Xmx` — set memory limits inside the container.
-- `-XX:+UseContainerSupport` / `-XX:ActiveProcessorCount` (these respect cgroup limits by default).
-- `-Dspring.profiles.active=prod` — switch the profile without recompiling.
-- `-Dlogging.level.root=INFO` or Spring environment variables (`SPRING_DATASOURCE_URL`, `STORAGE_S3_BUCKET`, etc.) — configure external services.
+- `-XX:ActiveProcessorCount` — limit the CPUs the JVM sees (cgroup limits are respected by default).
+- `-Dspring.profiles.active=prod` — switch the profile without rebuilding.
 
 ## Monitoring / management ports
 
